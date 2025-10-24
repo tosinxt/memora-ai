@@ -3,11 +3,18 @@ services:
     name: background-remover
     env: python
     buildCommand: pip install -r requirements.txt
+<<<<<<< HEAD
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --workers 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
       - key: PORT
         value: 10000
+=======
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+>>>>>>> 8f5c616 (lets go!)
     plan: free
     numInstances: 1
