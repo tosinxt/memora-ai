@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Background Remover</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .drop-zone {
+            border: 2px dashed #4a90e2;
+            border-radius: 0.5rem;
+            transition: all 0.3s ease;
+        }
+        .drop-zone.dragover {
+            border-color: #2c5282;
+            background-color: #ebf8ff;
+        }
+        .result-container {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">Background Remover</h1>
+            <p class="text-gray-600">Upload an image to remove its background instantly</p>
+        </header>
+
+        <div class="max-w-3xl mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+            <div id="dropZone" class="drop-zone p-12 text-center cursor-pointer">
+                <div class="space-y-4">
+                    <div class="text-blue-500">
+                        <i class="fas fa-cloud-upload-alt text-5xl"></i>
+                    </div>
+                    <h3 class="text-xl font-medium text-gray-700">Drag & Drop your image here</h3>
+                    <p class="text-gray-500">or click to browse files</p>
+                    <p class="text-sm text-gray-400">Supports JPG, JPEG, PNG (Max 16MB)</p>
+                    <input type="file" id="fileInput" class="hidden" accept="image/*">
+                </div>
+            </div>
+
+            <div id="loading" class="mt-6 text-center hidden">
+                <div class="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+                <p class="text-gray-600">Removing background...</p>
+                <p id="processingTime" class="text-sm text-gray-500 mt-2"></p>
+            </div>
+
+            <div id="resultContainer" class="result-container mt-8">
+                <h3 class="text-xl font-medium text-gray-800 mb-4">Result</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <p class="text-sm text-gray-500 mb-2">Original</p>
+                        <img id="originalImage" src="" alt="Original" class="w-full h-auto rounded-lg border border-gray-200">
+                    </div>
+                    <div>
+                        <p class="text-sm text-gray-500 mb-2">Background Removed</p>
+                        <div class="relative">
+                            <img id="resultImage" src="" alt="Result" class="w-full h-auto rounded-lg border-2 border-dashed border-gray-300">
+                            <div class="absolute bottom-4 right-4">
+                                <a id="downloadBtn" href="#" class="bg-blue-500 hover:bg-blue-600 text-white p-2 rounded-full shadow-lg">
+                                    <i class="fas fa-download"></i>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-6 text-center">
+                    <button id="newImageBtn" class="px-6 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg transition-colors">
+                        Process Another Image
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <footer class="mt-12 text-center text-gray-500 text-sm">
+            <p>Background removal powered by U²-Net and ONNX Runtime</p>
+        </footer>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const loading = document.getElementById('loading');
+        const resultContainer = document.getElementById('resultContainer');
+        const originalImage = document.getElementById('originalImage');
+        const resultImage = document.getElementById('resultImage');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const newImageBtn = document.getElementById('newImageBtn');
+        const processingTime = document.getElementById('processingTime');
+
+        // Handle drag and drop
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            dropZone.classList.add('dragover');
+        }
+
+        function unhighlight() {
+            dropZone.classList.remove('dragover');
+        }
+
+        // Handle dropped files
+        dropZone.addEventListener('drop', handleDrop, false);
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFiles);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles({ target: { files } });
+        }
+
+        function handleFiles(e) {
+            const files = e.target.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.type.startsWith('image/')) {
+                    processFile(file);
+                } else {
+                    alert('Please upload an image file (JPG, JPEG, PNG)');
+                }
+            }
+        }
+
+        function processFile(file) {
+            // Show loading state
+            dropZone.classList.add('hidden');
+            loading.classList.remove('hidden');
+            resultContainer.style.display = 'none';
+
+            // Show preview of original image
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                originalImage.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+
+            // Upload and process the image
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const startTime = performance.now();
+            
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                const endTime = performance.now();
+                const totalTime = ((endTime - startTime) / 1000).toFixed(2);
+                
+                // Show result
+                resultImage.src = data.result_url;
+                downloadBtn.href = data.result_url;
+                downloadBtn.download = `background_removed_${Date.now()}.png`;
+                processingTime.textContent = `Processed in ${data.processing_time}s (Total: ${totalTime}s)`;
+                
+                loading.classList.add('hidden');
+                resultContainer.style.display = 'block';
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error processing image: ' + error.message);
+                resetUI();
+            });
+        }
+
+        function resetUI() {
+            fileInput.value = '';
+            dropZone.classList.remove('hidden');
+            loading.classList.add('hidden');
+            resultContainer.style.display = 'none';
+        }
+
+        // Handle new image button
+        newImageBtn.addEventListener('click', resetUI);
+    </script>
+</body>
+</html>
