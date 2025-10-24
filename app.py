@@ -3,7 +3,6 @@ import subprocess
 import tempfile
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import uvicorn
 
@@ -42,8 +41,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 UPLOAD_FOLDER = "uploads"
 Path(UPLOAD_FOLDER).mkdir(exist_ok=True)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# No need for static files in this simplified version
 
 def remove_background(image_path: str, output_path: str) -> bool:
     """Remove background using rembg CLI"""
