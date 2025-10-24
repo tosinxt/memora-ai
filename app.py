@@ -62,8 +62,14 @@ def upload_file():
 def serve_result(filename):
     return send_from_directory(app.config['RESULT_FOLDER'], filename)
 
+def create_app():
+    return app
+
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    host = os.environ.get('HOST', '0.0.0.0')
+    
     # Use waitress as production server
     from waitress import serve
-    print("Starting server at http://localhost:5000")
-    serve(app, host="0.0.0.0", port=5000)
+    print(f"Starting server at http://{host}:{port}")
+    serve(app, host=host, port=port)
