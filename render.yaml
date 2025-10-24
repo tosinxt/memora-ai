@@ -2,19 +2,6 @@ services:
   - type: web
     name: background-remover
     env: python
-    buildCommand: |
-      python -m pip install --upgrade pip
-      pip install -r requirements.txt
-    startCommand: |
-      python -m gunicorn app:app --worker-class uvicorn.workers.UvicornWorker --workers 1 --bind 0.0.0.0:$PORT
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.0
-      - key: U2NET_HOME
-        value: /opt/render/.cache/rembg
-      - key: CUDA_VISIBLE_DEVICES
-        value: ""  # Disable CUDA/GPU
-      - key: PYTHONPATH
-        value: /opt/render/project/src
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     plan: free
-    numInstances: 1
