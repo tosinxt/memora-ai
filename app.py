@@ -1,18 +1,11 @@
 import os
-import uuid
-import logging
-import traceback
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, status
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
+import subprocess
+import tempfile
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pathlib import Path
-from typing import Optional, Dict, Any
 import uvicorn
-from rembg import new_session, remove, __version__ as rembg_version
-from PIL import Image, ImageFile
-import io
-import sys
 
 # Configure logging
 logging.basicConfig(
@@ -47,38 +40,26 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Create necessary directories
 UPLOAD_FOLDER = "uploads"
-OUTPUT_FOLDER = "static/results"
 Path(UPLOAD_FOLDER).mkdir(exist_ok=True)
-Path(OUTPUT_FOLDER).mkdir(exist_ok=True, parents=True)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
-# Initialize model (load once at startup)
-try:
-    logger.info(f"Initializing U2Net model (rembg v{rembg_version})...")
-    model = new_session("u2net")
-    logger.info("Model loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load model: {str(e)}")
-    logger.error(traceback.format_exc())
-    raise RuntimeError("Failed to initialize the AI model. Please check the logs for details.")
-
-def remove_background(image_data: bytes, output_path: Optional[str] = None) -> bytes:
-    """Remove background from image and return bytes"""
+def remove_background(image_path: str, output_path: str) -> bool:
+    """Remove background using rembg CLI"""
     try:
-        img = Image.open(io.BytesIO(image_data))
-        output = remove(img, session=model)
-        
-        if output_path:
-            output.save(output_path, 'PNG', optimize=True)
-        
-        img_byte_arr = io.BytesIO()
-        output.save(img_byte_arr, format='PNG')
-        return img_byte_arr.getvalue()
+        result = subprocess.run(
+            ["rembg", "i", image_path, output_path],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"Error: {result.stderr}")
+            return False
+        return True
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+        print(f"Error in remove_background: {str(e)}")
+        return False
 
 @app.get("/health")
 async def health_check() -> Dict[str, Any]:
@@ -115,9 +96,10 @@ async def home():
             <h1 class="text-4xl font-bold text-center mb-8 text-gray-800">Background Remover</h1>
             
             <div class="bg-white rounded-lg shadow-lg p-6 mb-8">
-                <div id="dropZone" class="dropzone p-12 text-center cursor-pointer">
-                    <input type="file" id="fileInput" class="hidden" accept="image/*">
-                    <div class="space-y-4">
+                <form action="/remove-bg" method="post" enctype="multipart/form-data" class="space-y-4">
+                    <div class="dropzone p-12 text-center cursor-pointer">
+                        <input type="file" name="file" id="fileInput" class="hidden" accept="image/*" required>
+                        <div class="space-y-4">
                         <svg class="mx-auto h-16 w-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                         </svg>
@@ -149,153 +131,96 @@ async def home():
                             </svg>
                             Download Image
                         </a>
-                    </div>
-                </div>
-                
-                <div id="loading" class="mt-6 text-center hidden">
-                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-600"></div>
-                    <p class="mt-2 text-gray-600">Removing background...</p>
-                </div>
-                
-                <div id="error" class="mt-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded hidden">
-                    <p id="errorMessage"></p>
-                </div>
-            </div>
             
-            <div class="text-center text-sm text-gray-500">
-                <p>Background Remover - Powered by U²-Net & FastAPI</p>
+            <div id="result" class="mt-8 hidden">
+                <h2 class="text-2xl font-semibold mb-4">Result</h2>
+                <div class="bg-gray-100 p-4 rounded-lg">
+                    <img id="resultImage" src="" alt="Result" class="max-w-full h-auto rounded">
+                </div>
+                <div class="mt-4 flex justify-end">
+                    <a id="downloadBtn" href="#" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-200">
+                        Download Image
+                    </a>
+                </div>
             </div>
         </div>
+    </div>
+
+    <script>
+        // Simple file input handling
+        const fileInput = document.getElementById('fileInput');
+        const dropZone = document.querySelector('.dropzone');
+        const result = document.getElementById('result');
+        const resultImage = document.getElementById('resultImage');
+        const downloadBtn = document.getElementById('downloadBtn');
         
-        <script>
-            const dropZone = document.getElementById('dropZone');
-            const fileInput = document.getElementById('fileInput');
-            const originalPreview = document.getElementById('originalPreview');
-            const resultPreview = document.getElementById('resultPreview');
-            const previewSection = document.getElementById('preview');
-            const downloadSection = document.getElementById('downloadSection');
-            const downloadBtn = document.getElementById('downloadBtn');
-            const loading = document.getElementById('loading');
-            const errorDiv = document.getElementById('error');
-            const errorMessage = document.getElementById('errorMessage');
-            
-            let currentResultUrl = '';
-            
-            // Handle drag and drop
-            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-                dropZone.addEventListener(eventName, preventDefaults, false);
-            });
-            
-            function preventDefaults(e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-            
-            ['dragenter', 'dragover'].forEach(eventName => {
-                dropZone.addEventListener(eventName, highlight, false);
-            });
-            
-            ['dragleave', 'drop'].forEach(eventName => {
-                dropZone.addEventListener(eventName, unhighlight, false);
-            });
-            
-            function highlight() {
-                dropZone.classList.add('border-blue-500', 'bg-blue-50');
-            }
-            
-            function unhighlight() {
-                dropZone.classList.remove('border-blue-500', 'bg-blue-50');
-            }
-            
-            // Handle file selection
-            dropZone.addEventListener('click', () => fileInput.click());
-            
-            fileInput.addEventListener('change', handleFiles);
-            dropZone.addEventListener('drop', handleDrop);
-            
-            function handleDrop(e) {
-                const dt = e.dataTransfer;
-                const files = dt.files;
-                handleFiles({ target: { files } });
-            }
-            
-            function handleFiles(e) {
-                const files = e.target.files;
-                if (files.length === 0) return;
-                
-                const file = files[0];
-                if (!file.type.match('image.*')) {
-                    showError('Please select an image file');
-                    return;
-                }
-                
-                if (file.size > 10 * 1024 * 1024) { // 10MB limit
-                    showError('File size should be less than 10MB');
-                    return;
-                }
-                
+        // Handle file selection
+        fileInput.addEventListener('change', function() {
+            const file = this.files[0];
+            if (file && file.type.match('image.*')) {
                 const reader = new FileReader();
                 reader.onload = function(e) {
-                    originalPreview.src = e.target.result;
-                    processImage(file);
-                };
+                    resultImage.src = e.target.result;
+                    result.classList.remove('hidden');
+                    
+                    // Update download link
+                    const url = URL.createObjectURL(file);
+                    downloadBtn.href = url;
+                    downloadBtn.download = 'nobg_' + file.name;
+                    
+                    // Scroll to result
+                    result.scrollIntoView({ behavior: 'smooth' });
+                }
                 reader.readAsDataURL(file);
             }
+        });
+
+        // Handle form submission
+        const form = document.querySelector('form');
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
             
-            async function processImage(file) {
-                try {
-                    // Show loading state
-                    previewSection.classList.add('hidden');
-                    downloadSection.classList.add('hidden');
-                    errorDiv.classList.add('hidden');
-                    loading.classList.remove('hidden');
-                    
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    
-                    const response = await fetch('/remove-bg', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    if (!response.ok) {
-                        const error = await response.json();
-                        throw new Error(error.detail || 'Failed to process image');
-                    }
-                    
-                    const blob = await response.blob();
-                    const url = URL.createObjectURL(blob);
-                    
-                    // Clean up previous URL if exists
-                    if (currentResultUrl) {
-                        URL.revokeObjectURL(currentResultUrl);
-                    }
-                    currentResultUrl = url;
-                    
-                    // Update UI
-                    resultPreview.src = url;
-                    downloadBtn.href = url;
-                    downloadBtn.download = `nobg_${file.name.replace(/\.[^/.]+$/, '')}.png`;
-                    
-                    // Show results
-                    previewSection.classList.remove('hidden');
-                    downloadSection.classList.remove('hidden');
-                    loading.classList.add('hidden');
-                    
-                } catch (error) {
-                    console.error('Error:', error);
-                    showError(error.message || 'An error occurred while processing the image');
-                    loading.classList.add('hidden');
+            const formData = new FormData(form);
+            const submitBtn = form.querySelector('button[type="submit"]');
+            const originalBtnText = submitBtn.textContent;
+            
+            try {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = 'Processing...';
+                
+                const response = await fetch('/remove-bg', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error || 'Failed to process image');
                 }
+                
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                
+                // Show result
+                resultImage.src = url;
+                downloadBtn.href = url;
+                downloadBtn.download = 'nobg_' + fileInput.files[0].name;
+                result.classList.remove('hidden');
+                
+                // Scroll to result
+                result.scrollIntoView({ behavior: 'smooth' });
+                
+            } catch (error) {
+                alert('Error: ' + error.message);
+                console.error('Error:', error);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
             }
-            
-            function showError(message) {
-                errorMessage.textContent = message;
-                errorDiv.classList.remove('hidden');
-            }
-        </script>
-    </body>
-    </html>
+        });
+    </script>
+</body>
+</html>
     """
 
 @app.post("/remove-bg")
@@ -320,33 +245,41 @@ async def remove_bg(file: UploadFile = File(...)):
         
         logger.info(f"Processing image: {file.filename} ({len(contents)/1024:.1f}KB)")
         
-        # Process image
-        try:
-            result = remove_background(contents)
-            logger.info(f"Successfully processed image: {file.filename}")
-            # Create a response with the image data
-            return Response(
-                content=result,
-                media_type="image/png",
-                headers={"Content-Disposition": f"inline; filename=nobg_{file.filename}"}
-            )
-        except Exception as e:
-            logger.error(f"Error processing image: {str(e)}")
-            logger.error(traceback.format_exc())
+        # Save uploaded file
+        input_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        output_path = os.path.join(UPLOAD_FOLDER, f"nobg_{file.filename}")
+        
+        with open(input_path, "wb") as f:
+            f.write(contents)
+        
+        # Process image using rembg
+        success = remove_background(input_path, output_path)
+        
+        if not success or not os.path.exists(output_path):
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to process image: {str(e)}"
+                detail="Failed to process image"
             )
-            
+        
+        # Return the processed image
+        return FileResponse(
+            output_path,
+            media_type="image/png",
+            filename=f"nobg_{file.filename}"
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=500,
-            detail="An unexpected error occurred while processing your request"
+            detail=f"An error occurred: {str(e)}"
         )
+    finally:
+        # Clean up temporary files
+        if 'input_path' in locals() and os.path.exists(input_path):
+            os.remove(input_path)
+        # Note: output_path is returned as a FileResponse which handles its own cleanup
 
 if __name__ == "__main__":
     # For development
